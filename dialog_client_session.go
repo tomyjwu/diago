@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"sync/atomic"
@@ -90,6 +91,8 @@ type InviteClientOptions struct {
 	Headers []sip.Header
 	// Stop on early media. ErrClientEarlyMedia will be returned
 	EarlyMediaDetect bool
+	// Outbound proxy host:port for routing INVITE requests
+	ProxyHost string
 }
 
 // WithAnonymousCaller sets from user Anonymous per RFC
@@ -219,6 +222,18 @@ func (d *DialogClientSession) Invite(ctx context.Context, opts InviteClientOptio
 
 	// Build here request
 	client := d.UA.Client
+
+	// Set outbound proxy if specified
+	if opts.ProxyHost != "" {
+		inviteReq.SetDestination(opts.ProxyHost)
+		// Debug: Log proxy configuration for INVITE
+		slog.Default().Info("INVITE using outbound proxy",
+			"recipient_uri", inviteReq.Recipient.String(),
+			"proxy_host", opts.ProxyHost,
+			"domain_vs_proxy", fmt.Sprintf("domain=%s, proxy=%s", inviteReq.Recipient.Host, opts.ProxyHost),
+		)
+	}
+
 	if err := sipgo.ClientRequestBuild(client, inviteReq); err != nil {
 		return err
 	}

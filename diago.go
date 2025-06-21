@@ -520,6 +520,8 @@ type InviteOptions struct {
 	Password string
 	// Custom headers to pass. DO NOT SET THIS to nil
 	Headers []sip.Header
+	// Outbound proxy host:port for routing INVITE requests
+	ProxyHost string
 }
 
 // Invite makes outgoing call leg and waits for answer.
@@ -536,6 +538,7 @@ func (dg *Diago) Invite(ctx context.Context, recipient sip.Uri, opts InviteOptio
 		Headers:    opts.Headers,
 		Username:   opts.Username,
 		Password:   opts.Password,
+		ProxyHost:  opts.ProxyHost,
 	}); err != nil {
 		d.Close()
 		return nil, err
@@ -569,6 +572,7 @@ func (dg *Diago) InviteBridge(ctx context.Context, recipient sip.Uri, bridge *Br
 		Headers:    opts.Headers,
 		Username:   opts.Username,
 		Password:   opts.Password,
+		ProxyHost:  opts.ProxyHost,
 	}); err != nil {
 		d.Close()
 		return nil, err
@@ -684,6 +688,18 @@ func (dg *Diago) contactHDRFromTransport(tran Transport, contact *sip.ContactHea
 		UriParams: sip.NewParams(),
 		Headers:   sip.NewParams(),
 	}
+
+	// Debug: Log contact URI construction
+	dg.log.Debug("Contact URI constructed from transport",
+		"transport_id", tran.ID,
+		"transport_protocol", tran.Transport,
+		"scheme", scheme,
+		"ua_name", dg.ua.Name(),
+		"external_host", tran.ExternalHost,
+		"external_port", tran.ExternalPort,
+		"final_contact_uri", contact.Address.String(),
+		"tls_enabled", tran.TLSConf != nil,
+	)
 }
 
 func (dg *Diago) getClient(tran *Transport) *sipgo.Client {
@@ -774,13 +790,44 @@ func (dg *Diago) RegisterTransaction(ctx context.Context, recipient sip.Uri, opt
 	if transport == "" {
 		transport = "udp"
 	}
+
+	// Debug: Log transport selection
+	dg.log.Debug("Selecting transport for registration",
+		"recipient_uri", recipient.String(),
+		"transport_from_uri", recipient.UriParams["transport"],
+		"selected_transport", transport,
+		"proxy_host", opts.ProxyHost,
+	)
+
 	tran, exists := dg.getTransport(transport)
 	if !exists {
 		return nil, fmt.Errorf("transport=%s does not exists", transport)
 	}
 
+	// Debug: Log transport details
+	dg.log.Debug("Transport selected for registration",
+		"transport_id", tran.ID,
+		"transport_protocol", tran.Transport,
+		"bind_host", tran.BindHost,
+		"bind_port", tran.BindPort,
+		"external_host", tran.ExternalHost,
+		"external_port", tran.ExternalPort,
+		"tls_enabled", tran.TLSConf != nil,
+	)
+
 	contactHDR := sip.ContactHeader{}
 	dg.contactHDRFromTransport(tran, &contactHDR)
+
+	// Debug: Log contact header configuration
+	dg.log.Debug("Contact header configured for registration",
+		"contact_uri", contactHDR.Address.String(),
+		"contact_scheme", contactHDR.Address.Scheme,
+		"contact_user", contactHDR.Address.User,
+		"contact_host", contactHDR.Address.Host,
+		"contact_port", contactHDR.Address.Port,
+		"external_host_used", tran.ExternalHost,
+		"external_port_used", tran.ExternalPort,
+	)
 
 	// client, err := sipgo.NewClient(dg.ua,
 	// 	sipgo.WithClientHostname(contactHDR.Address.Host),
@@ -791,6 +838,14 @@ func (dg *Diago) RegisterTransaction(ctx context.Context, recipient sip.Uri, opt
 	// 	return nil, err
 	// }
 	client := dg.getClient(&tran)
+
+	// Debug: Log client selection
+	dg.log.Debug("Client selected for registration",
+		"client_name", client.Name(),
+		"using_global_client", dg.client != nil,
+		"transport_client_used", dg.client == nil,
+	)
+
 	return newRegisterTransaction(client, recipient, contactHDR, opts), nil
 }
 
@@ -820,6 +875,19 @@ func (dg *Diago) createClient(tran Transport) (client *sipgo.Client) {
 		}
 	}
 
+	// Debug: Log client creation details
+	dg.log.Debug("Creating SIP client for transport",
+		"transport", tran.Transport,
+		"bind_host", tran.BindHost,
+		"bind_port", tran.BindPort,
+		"external_host", tran.ExternalHost,
+		"external_port", tran.ExternalPort,
+		"hostname", hostname,
+		"bind_port_used", bindPort,
+		"available_udp_ports", ua.TransportLayer().ListenPorts("udp"),
+		"tls_enabled", tran.TLSConf != nil,
+	)
+
 	cli, err := sipgo.NewClient(ua,
 		sipgo.WithClientNAT(),
 		sipgo.WithClientHostname(hostname),
@@ -829,6 +897,13 @@ func (dg *Diago) createClient(tran Transport) (client *sipgo.Client) {
 		dg.log.Error("Failed to create transport client", "error", err)
 		cli, _ = sipgo.NewClient(ua) // Make some defaut
 	}
+
+	// Debug: Log successful client creation
+	dg.log.Debug("SIP client created successfully",
+		"client_name", cli.Name(),
+		"transport", tran.Transport,
+	)
+
 	return cli
 }
 
@@ -838,4 +913,18 @@ func (dg *Diago) DialogCacheServer() DialogCache[*DialogServerSession] {
 
 func (dg *Diago) DialogCacheClient() DialogCache[*DialogClientSession] {
 	return dg.cache.client
+}
+
+// getClientForProxy returns a client optimized for a specific proxy destination
+// This can help with connection reuse when both REGISTER and INVITE use the same proxy
+func (dg *Diago) getClientForProxy(proxyHost string, tran *Transport) *sipgo.Client {
+	// If we have a global client, use it
+	if dg.client != nil {
+		return dg.client
+	}
+
+	// For now, use the transport client
+	// TODO: In the future, we could implement proxy-specific client caching
+	// to ensure better connection reuse for the same proxy
+	return tran.client
 }

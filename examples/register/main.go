@@ -19,12 +19,18 @@ import (
 
 // Run app:
 // go run . sip:user@myregistrar.com
+// go run . -username alice -password secret -proxy 192.168.1.100:5060 sip:alice@example.com
 
 func main() {
 	fUsername := flag.String("username", "", "Digest username")
 	fPassword := flag.String("password", "", "Digest password")
+	fProxy := flag.String("proxy", "", "Outbound proxy host:port (e.g., 192.168.1.100:5060)")
+	fDebug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s -username <username> -password <pass> sip:123@example.com\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s -username <username> -password <pass> [-proxy <proxy>] [-debug] sip:123@example.com\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nExamples:\n")
+		fmt.Fprintf(os.Stderr, "  %s -username alice -password secret sip:alice@example.com\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -username alice -password secret -proxy 192.168.1.100:5060 -debug sip:alice@example.com\n", os.Args[0])
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -33,6 +39,11 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
+	// Setup logger with debug level if requested
+	if *fDebug {
+		os.Setenv("LOG_LEVEL", "DEBUG")
+		os.Setenv("SIP_DEBUG", "true")
+	}
 	examples.SetupLogger()
 
 	recipientUri := flag.Arg(0)
@@ -41,12 +52,26 @@ func main() {
 		return
 	}
 
-	err := start(ctx, recipientUri, diago.RegisterOptions{
-		Username: *fUsername,
-		Password: *fPassword,
-	})
+	regOpts := diago.RegisterOptions{
+		Username:  *fUsername,
+		Password:  *fPassword,
+		ProxyHost: *fProxy,
+		Expiry:    3600, // 1 hour
+	}
+
+	// Log registration configuration
+	slog.Info("Starting registration",
+		"recipient_uri", recipientUri,
+		"username", regOpts.Username,
+		"proxy_host", regOpts.ProxyHost,
+		"expiry_seconds", int(regOpts.Expiry.Seconds()),
+		"debug_enabled", *fDebug,
+	)
+
+	err := start(ctx, recipientUri, regOpts)
 	if err != nil {
-		slog.Error("PBX finished with error", "error", err)
+		slog.Error("Registration finished with error", "error", err)
+		os.Exit(1)
 	}
 }
 
@@ -59,7 +84,7 @@ func start(ctx context.Context, recipientURI string, regOpts diago.RegisterOptio
 	// Setup our main transaction user
 	useragent := regOpts.Username
 	if useragent == "" {
-		useragent = "change-me"
+		useragent = "diago-register"
 	}
 
 	ua, _ := sipgo.NewUA(
@@ -68,11 +93,14 @@ func start(ctx context.Context, recipientURI string, regOpts diago.RegisterOptio
 	)
 	defer ua.Close()
 
+	// Configure transport with external host for NAT scenarios
 	tu := diago.NewDiago(ua, diago.WithTransport(
 		diago.Transport{
-			Transport: "udp",
-			BindHost:  "127.0.0.1",
-			BindPort:  15060,
+			Transport:    "udp",
+			BindHost:     "127.0.0.1",
+			BindPort:     15060,
+			ExternalHost: "192.168.1.50", // Example external IP for NAT
+			ExternalPort: 15060,
 		},
 	))
 
@@ -85,5 +113,10 @@ func start(ctx context.Context, recipientURI string, regOpts diago.RegisterOptio
 	}()
 
 	// Do register or fail on error
+	slog.Info("Starting registration process",
+		"recipient", recipient.String(),
+		"proxy", regOpts.ProxyHost,
+	)
+
 	return tu.Register(ctx, recipient, regOpts)
 }

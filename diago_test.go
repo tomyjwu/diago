@@ -228,3 +228,30 @@ func TestIntegrationDiagoTransportEmpheralPort(t *testing.T) {
 	t.Log("port assigned", newTran.BindPort)
 	assert.NotEmpty(t, newTran.BindPort)
 }
+
+func TestInviteWithOutboundProxy(t *testing.T) {
+	reqCh := make(chan *sip.Request)
+	dg := testDiagoClient(t, func(req *sip.Request) *sip.Response {
+		reqCh <- req
+		return sip.NewResponseFromRequest(req, 200, "OK", nil)
+	})
+
+	// Test INVITE with outbound proxy
+	opts := InviteOptions{
+		ProxyHost: "proxy.example.com:5060",
+	}
+
+	dialog, err := dg.NewDialog(sip.Uri{User: "callee", Host: "550e8400-e29b-41d4-a716-446655440000"}, NewDialogOptions{})
+	require.NoError(t, err)
+
+	go dialog.Invite(context.Background(), InviteClientOptions{
+		ProxyHost: opts.ProxyHost,
+	})
+
+	req := <-reqCh
+
+	// Verify the request is sent to the proxy, not the domain
+	assert.Equal(t, "proxy.example.com:5060", req.Destination())
+	// Verify the To header still contains the UUID domain
+	assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", req.To().Address.Host)
+}

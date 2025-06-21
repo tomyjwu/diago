@@ -88,3 +88,22 @@ func BridgeCall(d *diago.Diago, inDialog *diago.DialogServerSession, recipient s
 	}
 	return nil
 }
+
+// Example usage with outbound proxy for INVITE calls:
+//
+// // Create INVITE with UUID domain and outbound proxy
+// callRecipient := sip.Uri{}
+// sip.ParseUri("sip:callee@550e8400-e29b-41d4-a716-446655440000", &callRecipient)
+//
+// // Create dialog session with outbound proxy
+// dialog, err := dg.Invite(ctx, callRecipient, InviteOptions{
+//     ProxyHost: "proxy.example.com:5060",
+// })
+// if err != nil {
+//     return err
+// }
+//
+// // The INVITE will be sent to proxy.example.com:5060
+// // but the To header will still contain the UUID domain
+// // This allows the proxy to route based on the domain while
+// // the actual connection goes through the proxy
