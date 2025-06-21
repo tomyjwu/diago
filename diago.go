@@ -752,6 +752,9 @@ type RegisterOptions struct {
 	RetryInterval time.Duration
 	AllowHeaders  []string
 
+	// Custom headers to pass. DO NOT SET THIS to nil
+	Headers []sip.Header
+
 	// Useragent default will be used on what is provided as NewUA()
 	// UserAgent         string
 	// UserAgentHostname string
