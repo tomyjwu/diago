@@ -223,9 +223,22 @@ func (d *DialogClientSession) Invite(ctx context.Context, opts InviteClientOptio
 	// Build here request
 	client := d.UA.Client
 
-	// Set outbound proxy if specified
+	if err := sipgo.ClientRequestBuild(client, inviteReq); err != nil {
+		return err
+	}
+
+	// Set outbound proxy if specified - moved after ClientRequestBuild
 	if opts.ProxyHost != "" {
+		slog.Default().Info("Setting proxy destination in Diago",
+			"proxy_host", opts.ProxyHost,
+			"before_set_dest", inviteReq.Destination(),
+			"recipient_host", inviteReq.Recipient.Host,
+		)
 		inviteReq.SetDestination(opts.ProxyHost)
+		slog.Default().Info("After SetDestination in Diago",
+			"after_set_dest", inviteReq.Destination(),
+			"proxy_host", opts.ProxyHost,
+		)
 		// Debug: Log proxy configuration for INVITE
 		slog.Default().Info("INVITE using outbound proxy",
 			"recipient_uri", inviteReq.Recipient.String(),
@@ -234,8 +247,23 @@ func (d *DialogClientSession) Invite(ctx context.Context, opts InviteClientOptio
 		)
 	}
 
-	if err := sipgo.ClientRequestBuild(client, inviteReq); err != nil {
-		return err
+	// Debug: Log authentication credentials
+	if opts.Username != "" {
+		slog.Default().Info("Authentication credentials provided",
+			"username", opts.Username,
+			"has_password", opts.Password != "",
+		)
+	} else {
+		slog.Default().Info("No authentication credentials provided")
+	}
+
+	// Debug: Check if destination is preserved after ClientRequestBuild
+	if opts.ProxyHost != "" {
+		slog.Default().Info("After ClientRequestBuild in Diago",
+			"destination", inviteReq.Destination(),
+			"proxy_host", opts.ProxyHost,
+			"recipient_host", inviteReq.Recipient.Host,
+		)
 	}
 
 	// This only gets called after session established
